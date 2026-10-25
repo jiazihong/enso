@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ENSO 基本架构 · enso</title>
+<style>
+  :root { --bg:#0d1117; --card:#161b22; --line:#30363d; --fg:#e6edf3; --muted:#8b949e; --acc:#58a6ff; --green:#3fb950; --orange:#d29922; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg); color:var(--fg); font-family:"Segoe UI","Microsoft YaHei",sans-serif; line-height:1.7; padding:40px 16px; }
+  .wrap { max-width:860px; margin:0 auto; }
+  h1 { font-size:1.9em; margin-bottom:6px; }
+  h2 { font-size:1.25em; margin:36px 0 12px; color:var(--acc); }
+  .sub { color:var(--muted); margin-bottom:28px; }
+  .flow { display:flex; flex-wrap:wrap; gap:8px; margin:18px 0 8px; }
+  .node { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px 14px; font-size:.95em; }
+  .node b { color:var(--acc); }
+  .arrow { align-self:center; color:var(--muted); }
+  table { width:100%; border-collapse:collapse; margin:12px 0; font-size:.95em; }
+  th,td { border:1px solid var(--line); padding:8px 10px; text-align:left; }
+  th { background:var(--card); }
+  ul { padding-left:22px; margin:8px 0; }
+  li { margin:6px 0; }
+  a { color:var(--acc); }
+  .note { background:var(--card); border-left:3px solid var(--orange); padding:12px 16px; border-radius:6px; margin:16px 0; color:#e6edf3cc; font-size:.93em; }
+  .meta { color:var(--muted); font-size:.85em; margin-top:30px; }
+  code { background:#1f242c; padding:2px 6px; border-radius:4px; font-size:.9em; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>ENSO 基本架构</h1>
+<p class="sub">厄尔尼诺 / 拉尼娜状态预测核心模型 · 纯 Python 标准库 · 约 250 行</p>
+
+<h2>1. 整体流程</h2>
+<div class="flow">
+  <div class="node"><b>数据层</b><br>NOAA CPC<br>ERSST5 Niño3.4</div><div class="arrow">→</div>
+  <div class="node"><b>状态编码</b><br>±0.5°C<br>三态分类</div><div class="arrow">→</div>
+  <div class="node"><b>模型 1</b><br>状态转移<br>Dirichlet 平滑</div><div class="arrow">→</div>
+  <div class="node"><b>组合</b><br>技能加权<br>无未来泄漏</div><div class="arrow">→</div>
+  <div class="node"><b>验证</b><br>留一法 ×56 年<br>气候态基准</div>
+</div>
+<div class="flow">
+  <div class="node"><b>模型 2</b><br>历史相似型<br>高斯核检索</div><div class="arrow">↗ 并入组合</div>
+  <div class="node" style="margin-left:26px;"><b>自测</b><br>9 项边界/对称<br>/归一检验</div>
+</div>
+
+<h2>2. 各层职责</h2>
+<table>
+  <tr><th>层</th><th>做什么</th><th>关键细节</th></tr>
+  <tr><td>数据层</td><td>下载官方月距平并本地缓存</td><td>首次联网下载，之后离线可用；缺测值跳过</td></tr>
+  <tr><td>状态编码</td><td>连续距平 → 三档离散状态</td><td>≥+0.5 El Niño；≤-0.5 La Niña；其余中性</td></tr>
+  <tr><td>模型 1 状态转移</td><td>以当前状态为条件，统计历史提前期转移频率</td><td>Dirichlet(α=4) 先验平滑，小样本不崩</td></tr>
+  <tr><td>模型 2 相似型</td><td>近 12 个月轨迹在历史中找高斯核加权近邻</td><td>轨迹归一后欧氏距离，加权投票</td></tr>
+  <tr><td>组合层</td><td>按两模型过去的技能自适应定权</td><td>权重只来自起报点之前——杜绝未来泄漏</td></tr>
+  <tr><td>验证层</td><td>逐年留一法 + 气候态基准</td><td>5 月起报 / 3 个月提前期，共 56 年样本外</td></tr>
+  <tr><td>自测层</td><td>内置 9 项自测</td><td>状态边界、概率归一、符号翻转对称、Brier 极值、留一法边界</td></tr>
+</table>
+
+<h2>3. 核心设计原则</h2>
+<ul>
+  <li><b>严格无未来泄漏</b>：转移统计只遍历起报点之前的样本，组合权重只用历史累计技能，留一法逐年训练。</li>
+  <li><b>双模型互补</b>：状态转移捕捉持续性（位相惯性与生命周期），相似型捕捉轨迹形态（事件演变路径），技能加权折衷两者的历史优劣。</li>
+  <li><b>概率而非确定性</b>：输出三态概率而非单一判断，Brier 分诚实对照气候态——技能为负的档期不掩盖。</li>
+  <li><b>零依赖可复现</b>：仅标准库，任何装有 Python 3.8+ 的机器直接运行；数据与代码分离，离线可用。</li>
+</ul>
+
+<h2>4. 实测回测（留一法，1970 起 56 年）</h2>
+<table>
+  <tr><th>模型</th><th>Brier 分</th><th>技能（vs 气候态）</th></tr>
+  <tr><td>气候态基准</td><td>0.642</td><td>—</td></tr>
+  <tr><td>状态转移</td><td>0.606</td><td>+0.06</td></tr>
+  <tr><td>相似型</td><td>0.579</td><td>+0.10</td></tr>
+</table>
+
+<div class="note">
+  <b>预报力说明</b>：单变量统计模型在 3 个月以内具备正技能，9 个月以上技能快速衰减；
+  状态阈值 ±0.5°C 为单月口径，与 NOAA 官方 ONI（3 个月滑动连续 5 个月）存在边界月份差异；
+  本项目为统计演示，不可替代动力模式产品。
+</div>
+
+<h2>5. 相关链接</h2>
+<ul>
+  <li>源码：<a href="https://github.com/jiazihong/enso">github.com/jiazihong/enso</a>（本页对应仓库）</li>
+  <li>完整版（HTML 报告 / CI 月度更新 / 概率校准）：<a href="https://github.com/jiazihong/enso-probability">github.com/jiazihong/enso-probability</a></li>
+  <li>数据可视化小工具：<a href="https://github.com/jiazihong/project">github.com/jiazihong/project</a></li>
+</ul>
+
+<p class="meta">页面随仓库静态托管 · <code>python enso_core.py selftest</code> 可复现全部验证结论</p>
+
+</div>
+</body>
+</html>
